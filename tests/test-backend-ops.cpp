@@ -4973,7 +4973,7 @@ struct test_mul_mat : public test_case {
     const std::array<int64_t, 2> bs;  // dims 3 and 4
     const std::array<int64_t, 2> nr;  // repeat in dims 3 and 4
     const std::array<int64_t, 4> per; // permutation of dimensions
-    const int64_t k_v; // size of k in memory, resulting in a non-contiguous view for k_v > k, no view for k_v == 0
+    const int64_t k_v; // row stride in elements of a and b: gaps between rows for k_v > k, overlapping rows for k_v < k, no view for k_v == 0
     const uint32_t o; // number of outputs
     const bool src_overlap; // a and b are overlapping views of the same tensor
     const int64_t m_v; // rows of a in memory, the batches of a are strided for m_v > m, no view for m_v == 0
@@ -5059,6 +5059,25 @@ struct test_mul_mat : public test_case {
             b = ggml_view_4d(ctx, base, k, n, bs[0]*nr[0], bs[1]*nr[1], base->nb[1], base->nb[2], base->nb[3], k*ggml_type_size(type_a));
             ggml_set_name(a, "a");
             ggml_set_name(b, "b");
+        } else if (k_v != 0 && k_v < k) {
+            GGML_ASSERT(m_v == 0);
+
+            // overlapping rows, like a sliding window: row i starts at element i*k_v
+            // ggml_view_4d needs the source to be as large as a contiguous view
+            a = ggml_new_tensor_4d(ctx, type_a, k*m, 1, bs[0],       bs[1]);
+            b = ggml_new_tensor_4d(ctx, type_b, k*n, 1, bs[0]*nr[0], bs[1]*nr[1]);
+
+            if (!ggml_is_quantized(type_a)) {
+                if (bs[1] == 1 && nr[1] == 1) {
+                    ggml_set_param(a);
+                }
+                ggml_set_param(b);
+            }
+
+            a = ggml_view_4d(ctx, a, k, m, bs[0],       bs[1],       ggml_row_size(type_a, k_v), a->nb[2], a->nb[3], 0);
+            b = ggml_view_4d(ctx, b, k, n, bs[0]*nr[0], bs[1]*nr[1], ggml_row_size(type_b, k_v), b->nb[2], b->nb[3], 0);
+            ggml_set_name(a, "a");
+            ggml_set_name(b, "b");
         } else {
             const int64_t k_physical = k_v == 0 ? k : k_v;
             const int64_t m_physical = m_v == 0 ? m : m_v + (pad != 0);
@@ -5098,6 +5117,16 @@ struct test_mul_mat : public test_case {
     }
 
     bool run_whole_graph() override { return o > 1; }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            // views with overlapping rows are smaller than their data, they get it from their source
+            if (t->view_src != nullptr && k_v != 0 && k_v < k) {
+                continue;
+            }
+            init_tensor_uniform(t);
+        }
+    }
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -10368,6 +10397,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 16, 32, 32, { 1,  1}, {1, 1}, {0, 1, 2, 3}, 64, 3));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 64, 77, 77, {12,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 32, 4, 96, {3, 2}, {1, 1}, {0, 1, 2, 3}, 0, 1, true));
+    // a and b are views with overlapping rows
+    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 16, 16,  64, {1, 1}, {1, 1}, {0, 1, 2, 3}, 16));
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 64, 33, 256, {2, 3}, {1, 1}, {0, 1, 2, 3},  8));
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 37,  5, 512, {1, 1}, {2, 1}, {0, 1, 2, 3},  1));
+    }
     // the first rows of a KV cache: a is a view whose batches are strided by the cache length
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 8,  1, 64, {8, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 5120));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 8, 16, 64, {8, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 5120));
