@@ -3296,6 +3296,7 @@ struct test_bin_bcast : public test_case {
     bool perm1; // permute src1?
     bool src_overlap; // src0 and src1 are overlapping views of the same buffer
     const ggml_type type_b; // type of src1, GGML_TYPE_COUNT -> same as src0
+    bool nc0; // src0 is a view with strided rows
 
     bool run_whole_graph() override { return nf > 1; }
 
@@ -3303,6 +3304,9 @@ struct test_bin_bcast : public test_case {
         std::string s = VARS_TO_STR6(type, ne, nr, nf, perm1, src_overlap);
         if (type_b != GGML_TYPE_COUNT) {
             s += "," + VAR_TO_STR(type_b);
+        }
+        if (nc0) {
+            s += "," + VAR_TO_STR(nc0);
         }
         return s;
     }
@@ -3316,14 +3320,19 @@ struct test_bin_bcast : public test_case {
             std::array<int, 4> nr = {1, 2, 1, 1},
             int nf = 1,
             bool perm1 = false, bool src_overlap = false,
-            ggml_type type_b = GGML_TYPE_COUNT)
-        : op(op), type(type), ne(ne), nr(nr), nf(nf), perm1(perm1), src_overlap(src_overlap), type_b(type_b) {}
+            ggml_type type_b = GGML_TYPE_COUNT, bool nc0 = false)
+        : op(op), type(type), ne(ne), nr(nr), nf(nf), perm1(perm1), src_overlap(src_overlap), type_b(type_b), nc0(nc0) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         GGML_ASSERT(nf <= 16);
+        GGML_ASSERT(!(nc0 && src_overlap));
 
-        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0]*nr[0]*(nc0 ? 2 : 1), ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
         ggml_set_name(a, "a");
+        if (nc0) {
+            a = ggml_view_4d(ctx, a, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3], a->nb[1], a->nb[2], a->nb[3], 0);
+            ggml_set_name(a, "view_of_a");
+        }
 
         const ggml_type tb = type_b == GGML_TYPE_COUNT ? type : type_b;
 
@@ -3343,7 +3352,7 @@ struct test_bin_bcast : public test_case {
         }
 
         // The backward pass supports broadcasting only for GGML_ADD:
-        const bool grad_supported = op == ggml_add && ggml_are_same_shape(a, b[0]) && nf == 1 && !perm1;
+        const bool grad_supported = op == ggml_add && ggml_are_same_shape(a, b[0]) && nf == 1 && !perm1 && !nc0;
         if (grad_supported) {
             ggml_set_param(a);
             ggml_set_param(b[0]);
@@ -9936,6 +9945,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_BF16, {10, 5, 4, 3}, {1, 1, 1, 1}, 1, false, false, GGML_TYPE_F32));
         test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_BF16, {10, 5, 4, 3}, {2, 2, 2, 2}, 1, false, false, GGML_TYPE_F32));
         test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_BF16, {5120, 1, 1, 1}, {1, 32, 1, 1}, 1, false, false, GGML_TYPE_F32));
+    }
+
+    // src0 is a view with strided rows, e.g. a bias added to one part of a fused tensor
+    for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div, ggml_add_inplace, ggml_mul_inplace}) {
+        for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+            test_cases.emplace_back(new test_bin_bcast(op, type, {16, 1, 1, 1}, {1, 5, 4, 3}, 1, false, false, GGML_TYPE_COUNT, true));
+            test_cases.emplace_back(new test_bin_bcast(op, type, {10, 5, 4, 3}, {1, 1, 1, 1}, 1, false, false, GGML_TYPE_COUNT, true));
+            test_cases.emplace_back(new test_bin_bcast(op, type, {16, 5, 4, 3}, {1, 1, 2, 2}, 1, false, false, GGML_TYPE_COUNT, true));
+        }
     }
 
     // fusion
