@@ -252,6 +252,10 @@ void main() {
         pos_b_ib += BK_STEP;
 
         for (uint k_step = 0; k_step < BK_STEP; k_step++) {
+            // buf_a is not loaded past end_k, and for K < BK * BK_STEP it can hold stale Inf/NaN scales
+            if (block + k_step * BK >= end_k) {
+                break;
+            }
             // Load from shared into cache
             [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
                 [[unroll]] for (uint cr = 0; cr < TM; cr++) {
