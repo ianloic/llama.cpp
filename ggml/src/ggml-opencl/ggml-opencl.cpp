@@ -13240,6 +13240,12 @@ static bool ggml_cl_can_mul_mat(const struct ggml_tensor * src0, const struct gg
             (ne0 >= 32 && ne1 >= 32 && ne10 >= 32);
 }
 
+// size of t after ggml_cl_copy_to_contiguous
+// not ggml_nbytes(t), which is smaller for a view with overlapping rows
+static size_t ggml_cl_contiguous_nbytes(const ggml_tensor * t) {
+    return ggml_row_size(t->type, t->ne[0]) * t->ne[1] * t->ne[2] * t->ne[3];
+}
+
 // Copy a noncontiguous tensor to contiguous tensor. ne[] remains the same but
 // nb[] is recalculated such that tensor is contiguous.
 static void ggml_cl_copy_to_contiguous(ggml_backend_t backend, const ggml_tensor * src, cl_mem dst,
@@ -23921,7 +23927,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 cl_ulong offset1_cont = offset1;
 
                 if (!ggml_is_contiguous(src0)) {
-                    backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
+                    backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_cl_contiguous_nbytes(src0));
                     ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
                         nb00_cont, nb01_cont, nb02_cont, nb03_cont);
                     mem_src0 = backend_ctx->prealloc_src0.buffer;
@@ -23929,7 +23935,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 }
 
                 if (!ggml_is_contiguous(src1)) {
-                    backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_nbytes(src1));
+                    backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_cl_contiguous_nbytes(src1));
                     ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
                         nb10_cont, nb11_cont, nb12_cont, nb13_cont);
                     mem_src1 = backend_ctx->prealloc_src1.buffer;
@@ -23994,7 +24000,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 cl_ulong offset1_cont = offset1;
 
                 if (!ggml_is_contiguous(src0)) {
-                    backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
+                    backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_cl_contiguous_nbytes(src0));
                     ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
                         nb00_cont, nb01_cont, nb02_cont, nb03_cont);
                     mem_src0 = backend_ctx->prealloc_src0.buffer;
@@ -24002,7 +24008,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 }
 
                 if (!ggml_is_contiguous(src1)) {
-                    backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_nbytes(src1));
+                    backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_cl_contiguous_nbytes(src1));
                     ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
                             nb10_cont, nb11_cont, nb12_cont, nb13_cont);
                     mem_src1 = backend_ctx->prealloc_src1.buffer;
