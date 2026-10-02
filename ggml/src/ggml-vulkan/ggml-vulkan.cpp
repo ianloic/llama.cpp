@@ -4220,6 +4220,8 @@ vk_device ggml_vk_get_device(size_t idx) {
         device->subgroup_size = subgroup_props.subgroupSize;
         device->subgroup_size_log2 = uint32_t(log2f(float(device->subgroup_size)));
         device->uma = device->properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
+        // AMD proprietary driver on APUs: shaders can read stale data from device-local memory the host wrote through its mapping
+        device->stage_device_local_writes = device->uma && device->driver_id == vk::DriverId::eAmdProprietary;
         if (sm_builtins) {
             device->shader_core_count = sm_props.shaderSMCount;
         } else if (amd_shader_core_properties2) {

@@ -494,10 +494,14 @@ bool ggml_vk_buffer_write_async(vk_context subctx, vk_buffer& dst, size_t offset
     return ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, size, size, size, 1, sync_staging);
 }
 
+static bool ggml_vk_stage_host_write(const vk_buffer & dst) {
+    return dst->device->stage_device_local_writes && (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eDeviceLocal);
+}
+
 void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d(" << width << ", " << height << ")");
     // Buffer is already mapped
-    if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
+    if((dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) && !ggml_vk_stage_host_write(dst)) {
         GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
         if (width == spitch && width == dpitch) {
@@ -712,7 +716,7 @@ void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t offset,
     VK_LOG_DEBUG("ggml_vk_buffer_memset_async(" << offset << ", " << c << ", " << size << ")");
 
     if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
-        dst->device->uma) {
+        dst->device->uma && !ggml_vk_stage_host_write(dst)) {
         deferred_memset((uint8_t*)dst->ptr + offset, c, size, &ctx->memsets);
         return;
     }
@@ -725,7 +729,7 @@ void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t siz
     VK_LOG_DEBUG("ggml_vk_buffer_memset(" << offset << ", " << c << ", " << size << ")");
 
     if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
-        dst->device->uma) {
+        dst->device->uma && !ggml_vk_stage_host_write(dst)) {
         memset((uint8_t*)dst->ptr + offset, c, size);
         return;
     }
