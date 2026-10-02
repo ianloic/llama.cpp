@@ -7684,16 +7684,25 @@ struct test_acc : public test_case {
     const std::array<int64_t, 4> ne_a;
     const std::array<int64_t, 4> ne_b;
     const int64_t stride_dim;
+    const bool offset; // place b at the end of a in dims 0 and 1 instead of at the start
+    const bool inplace;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne_a, ne_b, stride_dim);
+        std::string s = VARS_TO_STR4(type, ne_a, ne_b, stride_dim);
+        if (offset) {
+            s += "," + VAR_TO_STR(offset);
+        }
+        if (inplace) {
+            s += "," + VAR_TO_STR(inplace);
+        }
+        return s;
     }
 
     test_acc(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {256, 17, 2, 3},
             std::array<int64_t, 4> ne_b = {256, 16, 2, 3},
-            uint64_t stride_dim = -1)
-        : type(type), ne_a(ne_a), ne_b(ne_b), stride_dim(stride_dim) {}
+            uint64_t stride_dim = -1, bool offset = false, bool inplace = false)
+        : type(type), ne_a(ne_a), ne_b(ne_b), stride_dim(stride_dim), offset(offset), inplace(inplace) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
@@ -7720,9 +7729,15 @@ struct test_acc : public test_case {
         }
         ggml_set_name(b, "b");
 
+        size_t offs = 0;
+        if (offset) {
+            offs = (ne_a[0] - ne_b[0])*a->nb[0] + (ne_a[1] - ne_b[1])*a->nb[1];
+        }
+
         // When ne_b[0] < ne_a[0], a->nb[1] != b->nb[1], so the stride
         // parameters to ggml_acc don't match b's natural stride.
-        ggml_tensor * out = ggml_acc(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], 0);
+        ggml_tensor * out = inplace ? ggml_acc_inplace(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], offs)
+                                    : ggml_acc(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], offs);
         ggml_set_name(out, "out");
 
         return out;
@@ -10925,6 +10940,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, 1));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 2));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {64, 16, 2, 3}, 3));
+    for (bool inplace : {false, true}) {
+        test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, -1, true, inplace));
+        test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, -1, true, inplace));
+        test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {64, 16, 2, 3},   3, true, inplace));
+    }
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, -1, false, true));
 
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true)); // circular
